@@ -1,0 +1,56 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: flask-counter-app
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # how many pods we can add at a time
+      maxUnavailable: 1  # how many pods can be unavailable during the rolling update
+  minReadySeconds: 5
+  revisionHistoryLimit: 1
+  template:
+    metadata:
+      labels:
+        app: counter-app
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 95
+              podAffinityTerm:
+                topologyKey: "kubernetes.io/hostname"
+                labelSelector:
+                  matchLabels:
+                    app: counter-app
+      containers:
+      # - args:
+      #   - "-c"
+      #   - "custom commands"
+      #   command: 
+      #   - /bin/bash
+      - readinessProbe:
+          httpGet:
+            path: /
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        env:
+        - name: K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+
+        - name: "DeploymentTime"
+          value: "${DeploymentTime}"
+
+        - name: "REDIS_URL"
+          value: "redis-cluster.redis.svc.cluster.local"
+
+        # image: tarunbhardwaj/flask-counter-app
+        image: akhilrajmailbox/flask-counter-app:latest
+        imagePullPolicy: Always
+        name: flask-counter-app
+      restartPolicy: Always
