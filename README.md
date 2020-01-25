@@ -2,9 +2,9 @@
 
 ## Prerequisite
 
-* kubectl
-* envsubst
+* [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
 * [helm](https://helm.sh/docs/intro/install/)
+* envsubst
 
 
 ## Create your K8s Cluster on AWS
