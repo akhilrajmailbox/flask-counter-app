@@ -3,21 +3,23 @@
 ## Prerequisite
 
 * kubectl
+* envsubst
+* [helm](https://helm.sh/docs/intro/install/)
 
 
 ## Create your K8s Cluster on AWS
 
 You can directly create the kubernetes cluster from aws web ui, but in this example we are creating it with `eksctl` command from terminal
 
-[nstall / upgrade eksctl](https://docs.aws.amazon.com/eks/latest/userguide/eksctl.html)
+[install / upgrade eksctl](https://docs.aws.amazon.com/eks/latest/userguide/eksctl.html)
 
 ```
 eksctl create cluster \
-    --name Demo-Cluster \
+    --name K8s-Cluster \
     --version 1.14 \
     --zones us-east-1a,us-east-1b,us-east-1c \
     --region us-east-1 \
-    --nodegroup-name Demo-Cluster-Nodeworkers \
+    --nodegroup-name K8s-Cluster-Nodeworkers \
     --node-type t2.medium \
     --nodes 3 \
     --nodes-min 3 \
@@ -25,10 +27,12 @@ eksctl create cluster \
     --managed
 ```
 
+Note : Its better to choose compute optimized machines like AWS `c5n.large`
+
 **Update your kubeconfig file with the following command**
 
 ```
-aws eks --region us-east-1 update-kubeconfig --name Demo-Cluster
+aws eks --region us-east-1 update-kubeconfig --name K8s-Cluster
 ```
 
 ## kubernetes Deployment for Redis Cluster
@@ -49,6 +53,25 @@ Old value : REDIS_URL='redis://redis-host:6379/0'
 New value : REDIS_URL='redis-host'
 ```
 
+## Horizontal Pod Autoscaler
+
+For Configuring HPA (Horizontal Pod Autoscaler) we are installing `Metrics Server` with help of `helm charts`. In this demo, We are using helm version < 3.x.x so the helm server configuration required and the `build.sh` script will take care of it.
+
+For testing purpose, the autoscaling configuration is as follows :
+
+```
+CPU limit           :   50 %
+Min Number of Pods  :   1
+Max Number of Pods  :   20
+```
+
+**You can test your deployment via apache benchmark [ab](https://httpd.apache.org/docs/2.4/programs/ab.html)**
+
+```
+ab -l -c 100 -t 10 http://LOADBALANCER_IPADDRESS/
+```
+
+The above command will increase the cpu usage in the `counter app` and HPA will increase the number of pods for this  in order to serve all the request upto 10 (Max Number of Pods). when the cpu goes donw, then the number of pods become 1 (Min Number of Pods).
 
 ## Deployment
 
@@ -65,6 +88,7 @@ Main modes of operation in `build.sh`:
 
 ```
    redis            :       Deploy HA Redis on K8s
+   metrics_deploy   :       Configure and Deploy Metrics Server (for HPA)
    counter_app      :       Deploy the application on K8s
    full_deploy      :       Complete Deployment and configuration in single command
 ```

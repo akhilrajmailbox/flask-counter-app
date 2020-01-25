@@ -48,9 +48,14 @@ spec:
 
         - name: "REDIS_URL"
           value: "redis-cluster.redis.svc.cluster.local"
+        # - name: "REDIS_URL"
+        #   value: "redis://redis-cluster:6379"
 
         # image: tarunbhardwaj/flask-counter-app
         image: akhilrajmailbox/flask-counter-app:latest
         imagePullPolicy: Always
         name: flask-counter-app
+        resources:
+          requests:
+            cpu: "100m"
       restartPolicy: Always

@@ -1,4 +1,7 @@
 #!/bin/bash
+type kubectl >/dev/null 2>&1 || { echo >&2 "CRITICAL: The kubectl is required for this script to run"; exit 2; }
+type helm >/dev/null 2>&1 || { echo >&2 "CRITICAL: The helm client is required for this script to run"; exit 2; }
+type envsubst >/dev/null 2>&1 || { echo >&2 "CRITICAL: The envsubst utility is required for this script to run"; exit 2; }
 
 export PROD_DIR=`dirname $0`
 export Command_Usage="./build.sh -o [option]"
@@ -9,7 +12,7 @@ if kubectl get nodes > /dev/null 2>&1 ; then
 #######################################
 function Setup_Namespace() {
     if kubectl get ns ${1} > /dev/null 2>&1 ; then
-        echo "namespace already created"
+        echo "namespace ${1} already created"
     else
         echo "creating namespace ${1}"
         kubectl create ns ${1}
@@ -17,6 +20,24 @@ function Setup_Namespace() {
 
     export K8S_NAMESPACE=${1}
     export namespace_options="--namespace=${K8S_NAMESPACE}"
+}
+
+
+#######################################
+## Check pod status
+function Pod_Status_Wait() {
+
+    echo "Checking pod status on : ${namespace_options} for the pod : ${1}"
+    Pod_Name=$(kubectl ${namespace_options} get pods ${1} | awk '{if(NR>1)print $1}')
+
+    for i in ${Pod_Name} ; do
+        Pod_Status=""
+        until [[ ${Pod_Status} == "Running" ]] ; do
+            echo "Waiting for the pod : ${i} to start...!"
+            export Pod_Status=$(kubectl ${namespace_options} get pods ${i} -o jsonpath="{.status.phase}")
+        done
+        echo "The pod : ${i} started and running...!"
+    done
 }
 
 
@@ -64,7 +85,7 @@ function Redis_Deploy() {
 function Counterapp_Deploy() {
     Setup_Namespace apps
     export DeploymentTime=$(date +%F--%H-%M-%S--%Z)
-    if kubectl get pods ${namespace_options} | grep flask-counter-app >/dev/null ; then
+    if kubectl get pods ${namespace_options} | grep flask-counter-app >/dev/null 2>&1 ; then
         envsubst < ${PROD_DIR}/K8s-Infra/counter_app-deployment.yaml    |    kubectl ${namespace_options} replace -f -
     else
         envsubst < ${PROD_DIR}/K8s-Infra/counter_app-deployment.yaml   |    kubectl ${namespace_options} apply -f -
@@ -73,9 +94,61 @@ function Counterapp_Deploy() {
 }
 
 
+#######################################
+# HPA for counter_app application
+function hpa_config() {
+    Setup_Namespace apps
+    ## HPA configuration
+    local cpu_percent=${1}
+    local min_pod=${2}
+    local max_pod=${3}
+    echo "Deploying HORIZONTAL POD AUTOSCALER with --cpu-percent=${cpu_percent} --min=${min_pod} --max=${max_pod}"
+    if kubectl ${namespace_options} get hpa flask-counter-app >/dev/null 2>&1 ; then
+        kubectl ${namespace_options} delete hpa flask-counter-app
+    fi
+    kubectl ${namespace_options} autoscale deployment flask-counter-app --cpu-percent=${cpu_percent} --min=${min_pod} --max=${max_pod}
+}
 
 
+################################################
+function helm_config() {
+    # echo "installing helm in your system"
+    # curl -L https://git.io/get_helm.sh | bash
+    Setup_Namespace kube-system
 
+    if helm version | grep "Client:" | grep 'SemVer:"v3.' ; then
+        echo "Your helm version is 3 and doesn't required the server configuration...!"
+    else
+        if ! kubectl get  deploy --namespace kube-system tiller-deploy ; then
+            echo "Your helm required the server configuration...!"
+            kubectl create serviceaccount --namespace kube-system tiller
+            kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+            helm init --service-account tiller
+            echo "waiting for 10 sec"
+            sleep 10
+            # kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'
+            # helm init --service-account tiller --upgrade
+            TILLER_POD=$(kubectl ${namespace_options} get pods -l "name=tiller" -o jsonpath="{.items[0].metadata.name}")
+            Pod_Status_Wait ${TILLER_POD}
+        fi
+    fi
+}
+
+
+################################################
+function metrics_deploy() {
+    helm_config
+    helm install stable/metrics-server \
+        --name metrics-server \
+        --version 2.0.4 \
+        --namespace metrics
+
+    SERVER_STATUS=$(kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath="{.status.conditions[0].status}")
+    until [[ ${SERVER_STATUS} == "True" ]] ; do
+        echo "waiting for metrics-server to start....!"
+        SERVER_STATUS=$(kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath="{.status.conditions[0].status}")
+    done
+}
 
 
 while getopts ":o:" opt
@@ -88,20 +161,25 @@ done
 
 if [[ $option = redis ]]; then
 	Redis_Deploy
+elif [[ $option = metrics_deploy ]]; then
+    metrics_config
 elif [[ $option = counter_app ]]; then
 	Counterapp_Deploy
+    hpa_config 50 1 20
 elif [[ $option = full_deploy ]]; then
-    Setup_Namespace create
+    metrics_deploy
     Redis_Deploy
 	Counterapp_Deploy
+    hpa_config 50 1 20
 else
-	echo "$Command_Usage"
+	echo -e "\n$Command_Usage\n"
 cat << EOF
 _-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_-_
 
 Main modes of operation:
 
    redis            :       Deploy HA Redis on K8s
+   metrics_deploy   :       Configure and Deploy Metrics Server (for HPA)
    counter_app      :       Deploy the application on K8s
    full_deploy      :       Complete Deployment and configuration in single command
 
